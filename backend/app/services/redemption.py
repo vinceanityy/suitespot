@@ -40,8 +40,10 @@ from app.services.points import get_balance
 POINTS_PER_DOLLAR: int = 100  # 100 pts = $1.00
 MIN_REDEMPTION_POINTS: int = 500  # floor: 500 pts = $5.00
 
-# Statuses on which redemption is allowed (pending hold or confirmed booking).
-_REDEEMABLE_STATUSES = {"pending", "confirmed"}
+# Redemption is only allowed while the booking is still pending (unpaid).
+# A confirmed (paid) booking can't be discounted retroactively — the charge
+# has already gone through and the guest would lose their points with no refund.
+_REDEEMABLE_STATUSES = {"pending"}
 
 
 # ── custom exceptions ──────────────────────────────────────────────────────
@@ -159,8 +161,17 @@ def apply_redemption(
             f"Redemption is not allowed on a {reservation.status!r} reservation."
         )
 
-    # Bug fix 2: guard against double-redemption (the DB UniqueConstraint would
-    # raise an IntegrityError; we raise a clean exception instead).
+    # Double-redemption guard: lock the reservation row so two simultaneous
+    # requests can't both pass this check and each write a points_redeemed row
+    # (which would let a user spend more points than they have).
+    # with_for_update() issues SELECT … FOR UPDATE in Postgres / SQLite WAL mode.
+    from app.models.reservation import Reservation as _Res
+    locked_reservation = db.execute(
+        select(_Res)
+        .where(_Res.id == reservation.id)
+        .with_for_update()
+    ).scalar_one_or_none()
+
     already = db.execute(
         select(PointsLedger).where(
             PointsLedger.reservation_id == reservation.id,
@@ -172,15 +183,18 @@ def apply_redemption(
             "Points have already been redeemed for this reservation."
         )
 
+    # Re-read balance inside the lock so we don't use a stale value from a
+    # concurrent request that already spent some points.
     quote = redemption_quote(
-        db, user_id=user_id, reservation=reservation,
+        db, user_id=user_id,
+        reservation=locked_reservation or reservation,
         points_requested=points_requested,
     )
 
     # Bug fix 1: update total_price so the subsequent charge uses the discounted
     # amount.  Without this the guest loses the points and still pays full price.
-    reservation.total_price = quote.new_total
-    db.add(reservation)
+    (locked_reservation or reservation).total_price = quote.new_total
+    db.add(locked_reservation or reservation)
 
     entry = PointsLedger(
         user_id=user_id,

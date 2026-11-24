@@ -44,7 +44,7 @@ def _reservation(db, user_id, price=200.00):
         check_out_date=date(2025, 8, 3),
         num_guests=1,
         total_price=price,
-        status="confirmed",
+        status="pending",
     )
     db.add(res)
     db.flush()
@@ -420,7 +420,7 @@ def test_http_apply_twice_returns_409(client, db_session):
 
 # Bug 3: cancelled booking cannot be redeemed against.
 
-@pytest.mark.parametrize("bad_status", ["cancelled", "completed"])
+@pytest.mark.parametrize("bad_status", ["cancelled", "completed", "confirmed"])
 def test_apply_on_closed_reservation_raises_not_redeemable(db_session, bad_status):
     """apply_redemption raises NotRedeemable for cancelled/completed reservations."""
     u = _user(db_session)
@@ -433,7 +433,7 @@ def test_apply_on_closed_reservation_raises_not_redeemable(db_session, bad_statu
         apply_redemption(db_session, user_id=u.id, reservation=res, points_requested=1000)
 
 
-@pytest.mark.parametrize("bad_status", ["cancelled", "completed"])
+@pytest.mark.parametrize("bad_status", ["cancelled", "completed", "confirmed"])
 def test_http_apply_on_closed_reservation_returns_409(client, db_session, bad_status):
     """HTTP: redeeming against a closed reservation → 409."""
     token = _register_and_login(client)

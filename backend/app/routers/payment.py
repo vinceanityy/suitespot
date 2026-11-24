@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.dependencies.auth import get_current_user
 from app.models import User
+from app.services.points import earn_points
 from app.services.booking_confirmation import (
     AmountMismatch,
     Confirmation,
@@ -88,6 +89,17 @@ def confirm_payment(
 
     res = result.reservation
     pay = result.payment
+
+    # 7.1.2 — Award loyalty points on first confirmation (idempotent via
+    # UniqueConstraint; second call is a no-op that returns existing row).
+    if not result.already_confirmed:
+        try:
+            earn_points(db, reservation=res)
+            db.commit()
+        except Exception:
+            # Points are a loyalty perk, not a payment blocker.
+            pass
+
     return {
         "reservation_id": res.id,
         "status": res.status,
