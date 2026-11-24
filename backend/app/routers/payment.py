@@ -1,4 +1,5 @@
 """US3.1, task 3.1.2 — Payment confirmation endpoint.
+US7.1, task 7.1.2 — Award points on confirmation (earn_points called here).
 
 POST /reservations/{id}/confirm
   Marks a pending reservation as confirmed once a successful charge is reported.
@@ -19,6 +20,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.dependencies.auth import get_current_user
 from app.models import User
+from app.services.points import earn_points
 from app.services.booking_confirmation import (
     AmountMismatch,
     Confirmation,
@@ -88,6 +90,18 @@ def confirm_payment(
 
     res = result.reservation
     pay = result.payment
+
+    # 7.1.2 — Award loyalty points on first confirmation (idempotent via
+    # UniqueConstraint on reservation_id + reason; second call is a no-op).
+    if not result.already_confirmed:
+        try:
+            earn_points(db, reservation=res)
+        except Exception:
+            # Points are a loyalty perk, not a payment blocker.  If the ledger
+            # write fails for any reason (e.g. race condition, constraint hit),
+            # the payment is still confirmed and we swallow the error silently.
+            pass
+
     return {
         "reservation_id": res.id,
         "status": res.status,
